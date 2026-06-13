@@ -3,7 +3,7 @@
  * Plugin Name: EZ Plugin Deploy
  * Plugin URI:  https://nonstopdev.us/plugin/ez-plugin-deploy-plugin/
  * Description: Large drag-and-drop zone on the Plugins page — deactivates & removes old version before installing.
- * Version:     1.8.1
+ * Version:     1.8.2
  * Author:      NonStop Dev
  * License:     GPL-2.0+
  */
@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
 if ( defined( 'WP_EZ_ADD_VERSION' ) ) {
 	return;
 }
-define( 'WP_EZ_ADD_VERSION', '1.8.1' );
+define( 'WP_EZ_ADD_VERSION', '1.8.2' );
 
 // Self-cleanup: delete the old filename if it still exists alongside this one
 add_action( 'admin_init', function () {
@@ -393,6 +393,30 @@ function ez_slug_from_zip( $zip_path ) {
 }
 
 /**
+ * Find the directory (within $base, searching up to 2 levels) that directly
+ * contains a PHP file with a Plugin Name header. Returns absolute path or ''.
+ */
+function ez_find_plugin_dir( $base, $depth = 0 ) {
+	$base = rtrim( $base, '/\\' );
+	if ( ! is_dir( $base ) || $depth > 2 ) {
+		return '';
+	}
+	foreach ( glob( $base . '/*.php' ) ?: [] as $php_file ) {
+		$headers = get_plugin_data( $php_file, false, false );
+		if ( ! empty( $headers['Name'] ) ) {
+			return $base;
+		}
+	}
+	foreach ( glob( $base . '/*', GLOB_ONLYDIR ) ?: [] as $subdir ) {
+		$found = ez_find_plugin_dir( $subdir, $depth + 1 );
+		if ( $found ) {
+			return $found;
+		}
+	}
+	return '';
+}
+
+/**
  * Recursively scans $dir (up to 2 levels) for a PHP file with a Plugin Name header.
  * Returns a path relative to WP_PLUGIN_DIR, or empty string on failure.
  */
@@ -508,10 +532,48 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 
 	// ------------------------------------------------------------------
 	// Install
+	//
+	// Normalize the unpacked source folder to the clean slug via
+	// upgrader_source_selection. This collapses any nesting (e.g.
+	// "my-plugin-1.2.3/my-plugin/") and forces the destination folder
+	// name to $zip_slug regardless of how the zip was structured.
 	// ------------------------------------------------------------------
+	$normalize_source = function ( $source, $remote_source ) use ( $zip_slug ) {
+		if ( ! $zip_slug ) {
+			return $source;
+		}
+
+		// Find the real plugin folder inside the unpacked source
+		$plugin_dir = ez_find_plugin_dir( $source );
+		if ( ! $plugin_dir ) {
+			return $source; // can't identify it — let WordPress proceed as-is
+		}
+
+		$parent  = rtrim( $remote_source, '/\\' );
+		$desired = $parent . DIRECTORY_SEPARATOR . $zip_slug;
+
+		if ( rtrim( $plugin_dir, '/\\' ) === rtrim( $desired, '/\\' ) ) {
+			return trailingslashit( $desired );
+		}
+
+		// Move/rename the identified plugin folder to the clean slug
+		if ( is_dir( $desired ) ) {
+			ez_rmdir( $desired );
+		}
+		if ( @rename( $plugin_dir, $desired ) ) {
+			return trailingslashit( $desired );
+		}
+
+		return $source; // rename failed — fall back
+	};
+
+	add_filter( 'upgrader_source_selection', $normalize_source, 10, 2 );
+
 	$skin     = new WP_Ajax_Upgrader_Skin();
 	$upgrader = new Plugin_Upgrader( $skin );
 	$result   = $upgrader->install( $package );
+
+	remove_filter( 'upgrader_source_selection', $normalize_source, 10 );
 
 	$file_upload->cleanup();
 
