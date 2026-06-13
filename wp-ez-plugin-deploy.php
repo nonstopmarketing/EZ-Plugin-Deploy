@@ -3,7 +3,7 @@
  * Plugin Name: EZ Plugin Deploy
  * Plugin URI:  https://nonstopdev.us/plugin/ez-plugin-deploy-plugin/
  * Description: Large drag-and-drop zone on the Plugins page — deactivates & removes old version before installing.
- * Version:     1.6.1
+ * Version:     1.7.0
  * Author:      NonStop Dev
  * License:     GPL-2.0+
  */
@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
 if ( defined( 'WP_EZ_ADD_VERSION' ) ) {
 	return;
 }
-define( 'WP_EZ_ADD_VERSION', '1.6.1' );
+define( 'WP_EZ_ADD_VERSION', '1.7.0' );
 
 // Self-cleanup: delete the old filename if it still exists alongside this one
 add_action( 'admin_init', function () {
@@ -33,7 +33,7 @@ add_action( 'admin_init', function () {
 
 add_action( 'admin_head', function () {
 	$screen = get_current_screen();
-	if ( ! $screen || $screen->id !== 'plugins' ) {
+	if ( ! $screen || ! in_array( $screen->id, [ 'plugins', 'plugin-install' ], true ) ) {
 		return;
 	}
 
@@ -323,7 +323,7 @@ add_action( 'admin_head', function () {
 
 add_action( 'admin_notices', function () {
 	$screen = get_current_screen();
-	if ( ! $screen || $screen->id !== 'plugins' ) {
+	if ( ! $screen || ! in_array( $screen->id, [ 'plugins', 'plugin-install' ], true ) ) {
 		return;
 	}
 	?>
