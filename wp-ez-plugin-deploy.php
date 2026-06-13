@@ -3,7 +3,7 @@
  * Plugin Name: EZ Plugin Deploy
  * Plugin URI:  https://nonstopdev.us/plugin/ez-plugin-deploy-plugin/
  * Description: Large drag-and-drop zone on the Plugins page — deactivates & removes old version before installing.
- * Version:     1.8.0
+ * Version:     1.8.1
  * Author:      NonStop Dev
  * License:     GPL-2.0+
  */
@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
 if ( defined( 'WP_EZ_ADD_VERSION' ) ) {
 	return;
 }
-define( 'WP_EZ_ADD_VERSION', '1.8.0' );
+define( 'WP_EZ_ADD_VERSION', '1.8.1' );
 
 // Self-cleanup: delete the old filename if it still exists alongside this one
 add_action( 'admin_init', function () {
@@ -530,33 +530,31 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 	}
 
 	// ------------------------------------------------------------------
-	// Locate the installed plugin's main file — try several strategies
+	// Locate the installed plugin's main file — three strategies in order
 	// ------------------------------------------------------------------
 	wp_cache_delete( 'plugins', 'plugins' );
 
-	$plugin_file = $upgrader->plugin_info(); // e.g. "my-plugin/my-plugin.php"
-
+	// 1. plugin_info() — reliable when upgrader ran cleanly
+	$plugin_file = $upgrader->plugin_info();
 	if ( $plugin_file && ! file_exists( WP_PLUGIN_DIR . '/' . $plugin_file ) ) {
 		$plugin_file = null;
 	}
 
-	// Scan the known slug folder for a file with valid plugin headers
+	// 2. get_plugins() scoped to the known slug folder — most reliable fallback
 	if ( ! $plugin_file && $zip_slug ) {
-		$plugin_file = ez_find_plugin_file_in_dir( WP_PLUGIN_DIR . '/' . $zip_slug, $zip_slug );
-	}
-
-	// HIGH-1: was referencing undefined $active_before — now correctly uses $active_plugins
-	if ( ! $plugin_file ) {
-		$all_plugins = get_plugins();
-		$active_now  = get_option( 'active_plugins', [] );
-		foreach ( array_keys( $all_plugins ) as $pfile ) {
-			if ( ! in_array( $pfile, $active_plugins, true ) && ! in_array( $pfile, $active_now, true ) ) {
-				if ( file_exists( WP_PLUGIN_DIR . '/' . $pfile ) ) {
-					$plugin_file = $pfile;
-					break;
-				}
+		$scoped = get_plugins( '/' . $zip_slug );
+		if ( $scoped ) {
+			$first       = array_key_first( $scoped );
+			$candidate   = $zip_slug . '/' . $first;
+			if ( file_exists( WP_PLUGIN_DIR . '/' . $candidate ) ) {
+				$plugin_file = $candidate;
 			}
 		}
+	}
+
+	// 3. Recursive filesystem scan for any PHP file with a Plugin Name header
+	if ( ! $plugin_file && $zip_slug ) {
+		$plugin_file = ez_find_plugin_file_in_dir( WP_PLUGIN_DIR . '/' . $zip_slug, $zip_slug );
 	}
 
 	// MEDIUM-3: keep detail messages generic — no attacker-controlled values
