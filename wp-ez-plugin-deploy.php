@@ -3,7 +3,7 @@
  * Plugin Name: EZ Plugin Deploy
  * Plugin URI:  https://nonstopdev.us/plugin/ez-plugin-deploy-plugin/
  * Description: Large drag-and-drop zone on the Plugins page — deactivates & removes old version before installing.
- * Version:     1.6.0
+ * Version:     1.6.1
  * Author:      NonStop Dev
  * License:     GPL-2.0+
  */
@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
 if ( defined( 'WP_EZ_ADD_VERSION' ) ) {
 	return;
 }
-define( 'WP_EZ_ADD_VERSION', '1.6.0' );
+define( 'WP_EZ_ADD_VERSION', '1.6.1' );
 
 // Self-cleanup: delete the old filename if it still exists alongside this one
 add_action( 'admin_init', function () {
@@ -542,7 +542,8 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 	if ( $old_dir_removed ) { $detail[] = 'Removed old plugin folder.'; }
 
 	// ------------------------------------------------------------------
-	// Activate
+	// Activate — buffer any stray output from the plugin's activation
+	// hook so it doesn't corrupt the JSON response
 	// ------------------------------------------------------------------
 	if ( ! $plugin_file ) {
 		wp_send_json_success( [
@@ -551,8 +552,9 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 		] );
 	}
 
-	// MEDIUM-4: remove $silent flag so activation hooks fire normally
-	$activate = activate_plugin( $plugin_file, '', false, false );
+	ob_start();
+	$activate = activate_plugin( $plugin_file, '', false, true );
+	ob_end_clean();
 
 	if ( is_wp_error( $activate ) ) {
 		wp_send_json_success( [
