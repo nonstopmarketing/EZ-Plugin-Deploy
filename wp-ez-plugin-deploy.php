@@ -3,7 +3,7 @@
  * Plugin Name: EZ Plugin Deploy
  * Plugin URI:  https://nonstopdev.us/plugin/ez-plugin-deploy-plugin/
  * Description: Large drag-and-drop zone on the Plugins page — deactivates & removes old version before installing.
- * Version:     1.7.1
+ * Version:     1.7.2
  * Author:      NonStop Dev
  * License:     GPL-2.0+
  */
@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
 if ( defined( 'WP_EZ_ADD_VERSION' ) ) {
 	return;
 }
-define( 'WP_EZ_ADD_VERSION', '1.7.1' );
+define( 'WP_EZ_ADD_VERSION', '1.7.2' );
 
 // Self-cleanup: delete the old filename if it still exists alongside this one
 add_action( 'admin_init', function () {
@@ -249,18 +249,13 @@ add_action( 'admin_head', function () {
 			// ------------------------------------------------------------------
 			var deleteNonce = <?php echo wp_json_encode( $delete_nonce ); ?>;
 			var ajaxUrl     = <?php echo wp_json_encode( $ajax ); ?>;
-			var ownPlugin   = <?php echo wp_json_encode( plugin_basename( __FILE__ ) ); ?>;
 
 			document.querySelectorAll('#the-list tr[data-plugin]').forEach(function (row) {
-				var pluginFile = row.getAttribute('data-plugin');
-
-				// Only add EZ Delete to this plugin's own row
-				if (pluginFile !== ownPlugin) return;
-
-				// Only when inactive
+				// Only add to inactive plugins
 				if (row.classList.contains('active')) return;
 
-				var actionDiv = row.querySelector('.row-actions');
+				var pluginFile = row.getAttribute('data-plugin');
+				var actionDiv  = row.querySelector('.row-actions');
 				if (!actionDiv) return;
 
 				// Don't double-add
