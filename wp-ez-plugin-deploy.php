@@ -3,7 +3,7 @@
  * Plugin Name: EZ Plugin Deploy
  * Plugin URI:  https://nonstopdev.us/plugin/ez-plugin-deploy-plugin/
  * Description: Large drag-and-drop zone on the Plugins page — deactivates & removes old version before installing.
- * Version:     1.5.1
+ * Version:     1.6.0
  * Author:      NonStop Dev
  * License:     GPL-2.0+
  */
@@ -14,10 +14,13 @@ defined( 'ABSPATH' ) || exit;
 if ( defined( 'WP_EZ_ADD_VERSION' ) ) {
 	return;
 }
-define( 'WP_EZ_ADD_VERSION', '1.5.1' );
+define( 'WP_EZ_ADD_VERSION', '1.6.0' );
 
 // Self-cleanup: delete the old filename if it still exists alongside this one
 add_action( 'admin_init', function () {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		return;
+	}
 	$old = __DIR__ . '/wp-ez-add.php';
 	if ( file_exists( $old ) ) {
 		@unlink( $old );
@@ -269,7 +272,7 @@ add_action( 'admin_head', function () {
 
 				link.addEventListener('click', function (e) {
 					e.preventDefault();
-					if (!confirm('Delete "' + pluginFile + '"? This cannot be undone.')) return;
+					if (!confirm('Delete "' + pluginFile.replace(/"/g, '\\"') + '"? This cannot be undone.')) return;
 					ezDeletePlugin(pluginFile, row);
 				});
 
@@ -371,17 +374,30 @@ function ez_find_plugin_file_in_dir( $dir, $relative_prefix, $depth = 0 ) {
 
 add_action( 'wp_ajax_wp_ez_add_upload', function () {
 
-	if ( ! current_user_can( 'install_plugins' ) || ! current_user_can( 'activate_plugins' ) ) {
-		wp_send_json_error( [ 'message' => 'Insufficient permissions.' ] );
-	}
-
+	// MEDIUM-1: nonce first, capability second
 	if ( ! isset( $_POST['_nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_nonce'] ) ), 'wp_ez_add_upload' ) ) {
 		wp_send_json_error( [ 'message' => 'Security check failed.' ] );
+	}
+
+	if ( ! current_user_can( 'install_plugins' ) || ! current_user_can( 'activate_plugins' ) ) {
+		wp_send_json_error( [ 'message' => 'Insufficient permissions.' ] );
 	}
 
 	if ( empty( $_FILES['pluginzip'] ) || $_FILES['pluginzip']['error'] !== UPLOAD_ERR_OK ) {
 		$code = isset( $_FILES['pluginzip']['error'] ) ? (int) $_FILES['pluginzip']['error'] : -1;
 		wp_send_json_error( [ 'message' => 'File upload error (code ' . $code . ').' ] );
+	}
+
+	// HIGH-4: verify ZIP magic bytes server-side before doing anything else
+	$tmp_path = $_FILES['pluginzip']['tmp_name'];
+	$fh       = @fopen( $tmp_path, 'rb' );
+	if ( ! $fh ) {
+		wp_send_json_error( [ 'message' => 'Could not read uploaded file.' ] );
+	}
+	$magic = fread( $fh, 4 );
+	fclose( $fh );
+	if ( $magic !== "PK\x03\x04" ) {
+		wp_send_json_error( [ 'message' => 'Uploaded file is not a valid ZIP archive.' ] );
 	}
 
 	require_once ABSPATH . 'wp-admin/includes/file.php';
@@ -399,9 +415,8 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 	$package     = $file_upload->package;
 
 	// ------------------------------------------------------------------
-	// Read the top-level folder name from the zip BEFORE installing
-	// so we can deactivate + delete any existing copy first.
-	// Iterate entries rather than assuming index 0 is the folder.
+	// Read the top-level folder name from the zip BEFORE installing.
+	// HIGH-3: enforce strict slug allowlist — letters, numbers, hyphens, underscores only.
 	// ------------------------------------------------------------------
 	$zip_slug = '';
 	if ( class_exists( 'ZipArchive' ) ) {
@@ -411,8 +426,8 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 				$name  = $zip->getNameIndex( $i );
 				$parts = explode( '/', ltrim( $name, '/' ) );
 				$top   = $parts[0];
-				// A valid plugin slug: non-empty, no extension, not a dotfile
-				if ( $top && strpos( $top, '.' ) === false ) {
+				// Strict allowlist: only safe plugin slug characters
+				if ( $top && preg_match( '/^[a-zA-Z0-9_-]+$/', $top ) ) {
 					$zip_slug = $top;
 					break;
 				}
@@ -421,17 +436,23 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 		}
 	}
 
-	// Fallback: derive slug from zip filename by stripping trailing version numbers
+	// Fallback: derive slug from zip filename — sanitize strictly
 	if ( ! $zip_slug ) {
-		$zip_slug = preg_replace( '/[\s_-]?v?\d[\d.]*(-[a-z0-9]+)?$/i', '', basename( $_FILES['pluginzip']['name'], '.zip' ) );
+		$raw      = basename( sanitize_file_name( $_FILES['pluginzip']['name'] ), '.zip' );
+		$stripped = preg_replace( '/[\s_-]?v?\d[\d.]*(-[a-z0-9]+)?$/i', '', $raw );
+		// MEDIUM-2: allowlist after stripping version suffix
+		if ( preg_match( '/^[a-zA-Z0-9_-]+$/', $stripped ) ) {
+			$zip_slug = $stripped;
+		}
 	}
 
-	$deactivated   = [];
+	$deactivated     = [];
 	$old_dir_removed = false;
+	// HIGH-1: snapshot active plugins BEFORE install (was wrongly named $active_before later)
+	$active_plugins  = get_option( 'active_plugins', [] );
 
 	if ( $zip_slug ) {
 		// Deactivate any active plugin whose folder matches
-		$active_plugins = get_option( 'active_plugins', [] );
 		foreach ( $active_plugins as $active_file ) {
 			$active_slug = ( dirname( $active_file ) === '.' )
 				? basename( $active_file, '.php' )
@@ -443,11 +464,22 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 			}
 		}
 
-		// Delete the existing plugin directory so the upgrader won't choke on it
-		$old_dir = WP_PLUGIN_DIR . '/' . $zip_slug;
-		if ( is_dir( $old_dir ) && $wp_filesystem ) {
-			$wp_filesystem->delete( $old_dir, true );
-			$old_dir_removed = true;
+		// HIGH-2: confine $old_dir to WP_PLUGIN_DIR with realpath before deleting
+		$old_dir         = WP_PLUGIN_DIR . '/' . $zip_slug;
+		$real_plugin_dir = realpath( WP_PLUGIN_DIR );
+		$real_old_dir    = realpath( $old_dir );
+
+		if (
+			$real_old_dir &&
+			$real_plugin_dir &&
+			strpos( $real_old_dir, $real_plugin_dir . DIRECTORY_SEPARATOR ) === 0 &&
+			is_dir( $real_old_dir ) &&
+			$wp_filesystem
+		) {
+			// LOW-2: check delete return value
+			if ( $wp_filesystem->delete( $real_old_dir, true ) ) {
+				$old_dir_removed = true;
+			}
 		}
 	}
 
@@ -481,10 +513,8 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 
 	$plugin_file = $upgrader->plugin_info(); // e.g. "my-plugin/my-plugin.php"
 
-	// If plugin_info gave us something, trust it even if it's deeply nested —
-	// WordPress resolves plugin paths relative to WP_PLUGIN_DIR regardless of depth.
 	if ( $plugin_file && ! file_exists( WP_PLUGIN_DIR . '/' . $plugin_file ) ) {
-		$plugin_file = null; // path doesn't exist, fall through to scan
+		$plugin_file = null;
 	}
 
 	// Scan the known slug folder for a file with valid plugin headers
@@ -492,12 +522,12 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 		$plugin_file = ez_find_plugin_file_in_dir( WP_PLUGIN_DIR . '/' . $zip_slug, $zip_slug );
 	}
 
-	// Broader scan: any plugin dir that wasn't present before this request
+	// HIGH-1: was referencing undefined $active_before — now correctly uses $active_plugins
 	if ( ! $plugin_file ) {
 		$all_plugins = get_plugins();
 		$active_now  = get_option( 'active_plugins', [] );
 		foreach ( array_keys( $all_plugins ) as $pfile ) {
-			if ( ! in_array( $pfile, $active_before, true ) && ! in_array( $pfile, $active_now, true ) ) {
+			if ( ! in_array( $pfile, $active_plugins, true ) && ! in_array( $pfile, $active_now, true ) ) {
 				if ( file_exists( WP_PLUGIN_DIR . '/' . $pfile ) ) {
 					$plugin_file = $pfile;
 					break;
@@ -506,33 +536,32 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 		}
 	}
 
+	// MEDIUM-3: keep detail messages generic — no attacker-controlled values
 	$detail = [];
-	if ( $deactivated )     { $detail[] = 'Deactivated: ' . implode( ', ', $deactivated ); }
-	if ( $old_dir_removed ) { $detail[] = 'Removed old folder: ' . $zip_slug; }
+	if ( $deactivated )     { $detail[] = 'Deactivated previous version.'; }
+	if ( $old_dir_removed ) { $detail[] = 'Removed old plugin folder.'; }
 
 	// ------------------------------------------------------------------
-	// Activate (graceful degradation if we can't pin the file)
+	// Activate
 	// ------------------------------------------------------------------
 	if ( ! $plugin_file ) {
-		// Install succeeded but we couldn't locate the main file.
-		// Return partial success so the page reloads and user can activate manually.
 		wp_send_json_success( [
 			'message' => 'Plugin installed — please activate it manually.',
-			'detail'  => implode( "\n", $detail ) . "\nCould not auto-locate main file (slug: $zip_slug).",
+			'detail'  => implode( "\n", $detail ),
 		] );
 	}
 
-	$activate = activate_plugin( $plugin_file, '', false, true );
+	// MEDIUM-4: remove $silent flag so activation hooks fire normally
+	$activate = activate_plugin( $plugin_file, '', false, false );
 
 	if ( is_wp_error( $activate ) ) {
-		// Still a partial success — installed, just not activated
 		wp_send_json_success( [
 			'message' => 'Installed but activation failed — activate manually.',
-			'detail'  => implode( "\n", $detail ) . "\nActivation error: " . $activate->get_error_message(),
+			'detail'  => implode( "\n", $detail ),
 		] );
 	}
 
-	$detail[] = 'Activated: ' . $plugin_file;
+	$detail[] = 'Activated successfully.';
 
 	wp_send_json_success( [
 		'message' => 'Plugin installed and activated!',
@@ -546,12 +575,13 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 
 add_action( 'wp_ajax_wp_ez_add_delete', function () {
 
-	if ( ! current_user_can( 'delete_plugins' ) ) {
-		wp_send_json_error( [ 'message' => 'Insufficient permissions.' ] );
-	}
-
+	// MEDIUM-1: nonce first
 	if ( ! isset( $_POST['_nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_nonce'] ) ), 'wp_ez_add_delete' ) ) {
 		wp_send_json_error( [ 'message' => 'Security check failed.' ] );
+	}
+
+	if ( ! current_user_can( 'delete_plugins' ) ) {
+		wp_send_json_error( [ 'message' => 'Insufficient permissions.' ] );
 	}
 
 	$plugin_file = isset( $_POST['plugin_file'] ) ? sanitize_text_field( wp_unslash( $_POST['plugin_file'] ) ) : '';
@@ -580,10 +610,10 @@ add_action( 'wp_ajax_wp_ez_add_delete', function () {
 		? WP_PLUGIN_DIR . '/' . basename( $plugin_file )  // single-file plugin
 		: WP_PLUGIN_DIR . '/' . $slug;
 
-	// Verify the path is inside WP_PLUGIN_DIR
+	// LOW-3: use trailing separator in realpath prefix check to prevent prefix confusion
 	$real_plugin_dir = realpath( WP_PLUGIN_DIR );
 	$real_target     = realpath( $abs_dir );
-	if ( ! $real_target || strpos( $real_target, $real_plugin_dir ) !== 0 ) {
+	if ( ! $real_target || ! $real_plugin_dir || strpos( $real_target, $real_plugin_dir . DIRECTORY_SEPARATOR ) !== 0 ) {
 		wp_send_json_error( [ 'message' => 'Path is outside the plugins directory.' ] );
 	}
 
