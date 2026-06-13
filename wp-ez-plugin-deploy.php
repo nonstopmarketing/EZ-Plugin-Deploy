@@ -3,7 +3,7 @@
  * Plugin Name: EZ Plugin Deploy
  * Plugin URI:  https://nonstopdev.us/plugin/ez-plugin-deploy-plugin/
  * Description: Large drag-and-drop zone on the Plugins page — deactivates & removes old version before installing.
- * Version:     1.7.2
+ * Version:     1.8.0
  * Author:      NonStop Dev
  * License:     GPL-2.0+
  */
@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
 if ( defined( 'WP_EZ_ADD_VERSION' ) ) {
 	return;
 }
-define( 'WP_EZ_ADD_VERSION', '1.7.2' );
+define( 'WP_EZ_ADD_VERSION', '1.8.0' );
 
 // Self-cleanup: delete the old filename if it still exists alongside this one
 add_action( 'admin_init', function () {
@@ -341,8 +341,56 @@ add_action( 'admin_notices', function () {
 } );
 
 /* ------------------------------------------------------------------ */
-/*  Helper: find the main plugin file inside any directory             */
+/*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Recursively delete a directory using native PHP — bypasses WP_Filesystem
+ * so it works on shared hosts where WP_Filesystem requires FTP credentials.
+ */
+function ez_rmdir( $dir ) {
+	$dir = rtrim( $dir, '/\\' );
+	if ( ! is_dir( $dir ) ) {
+		return false;
+	}
+	$items = @scandir( $dir );
+	if ( $items ) {
+		foreach ( array_diff( $items, [ '.', '..' ] ) as $item ) {
+			$path = $dir . DIRECTORY_SEPARATOR . $item;
+			if ( is_dir( $path ) ) {
+				ez_rmdir( $path );
+			} else {
+				@unlink( $path );
+			}
+		}
+	}
+	return @rmdir( $dir );
+}
+
+/**
+ * Read the top-level folder slug from a zip file path.
+ * Returns empty string on failure.
+ */
+function ez_slug_from_zip( $zip_path ) {
+	if ( ! class_exists( 'ZipArchive' ) ) {
+		return '';
+	}
+	$zip = new ZipArchive();
+	if ( $zip->open( $zip_path ) !== true ) {
+		return '';
+	}
+	$slug = '';
+	for ( $i = 0; $i < $zip->numFiles; $i++ ) {
+		$parts = explode( '/', ltrim( $zip->getNameIndex( $i ), '/' ) );
+		$top   = $parts[0];
+		if ( $top && preg_match( '/^[a-zA-Z0-9_-]+$/', $top ) ) {
+			$slug = $top;
+			break;
+		}
+	}
+	$zip->close();
+	return $slug;
+}
 
 /**
  * Recursively scans $dir (up to 2 levels) for a PHP file with a Plugin Name header.
@@ -358,7 +406,6 @@ function ez_find_plugin_file_in_dir( $dir, $relative_prefix, $depth = 0 ) {
 			return ltrim( str_replace( WP_PLUGIN_DIR, '', $php_file ), '/\\' );
 		}
 	}
-	// Recurse into subdirectories
 	foreach ( glob( $dir . '/*', GLOB_ONLYDIR ) ?: [] as $subdir ) {
 		$found = ez_find_plugin_file_in_dir( $subdir, $relative_prefix, $depth + 1 );
 		if ( $found ) {
@@ -388,7 +435,7 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 		wp_send_json_error( [ 'message' => 'File upload error (code ' . $code . ').' ] );
 	}
 
-	// HIGH-4: verify ZIP magic bytes server-side before doing anything else
+	// Verify ZIP magic bytes from the original tmp file BEFORE it gets moved
 	$tmp_path = $_FILES['pluginzip']['tmp_name'];
 	$fh       = @fopen( $tmp_path, 'rb' );
 	if ( ! $fh ) {
@@ -400,6 +447,18 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 		wp_send_json_error( [ 'message' => 'Uploaded file is not a valid ZIP archive.' ] );
 	}
 
+	// Read the slug from tmp_name NOW, before File_Upload_Upgrader moves it
+	$zip_slug = ez_slug_from_zip( $tmp_path );
+
+	// Fallback: derive from filename
+	if ( ! $zip_slug ) {
+		$raw      = basename( sanitize_file_name( $_FILES['pluginzip']['name'] ), '.zip' );
+		$stripped = preg_replace( '/[\s_-]?v?\d[\d.]*(-[a-z0-9]+)?$/i', '', $raw );
+		if ( preg_match( '/^[a-zA-Z0-9_-]+$/', $stripped ) ) {
+			$zip_slug = $stripped;
+		}
+	}
+
 	require_once ABSPATH . 'wp-admin/includes/file.php';
 	require_once ABSPATH . 'wp-admin/includes/misc.php';
 	require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
@@ -408,47 +467,13 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 	require_once ABSPATH . 'wp-admin/includes/plugin-install.php';
 
 	WP_Filesystem();
-	global $wp_filesystem;
 
 	// Move upload to WP-managed tmp path
 	$file_upload = new File_Upload_Upgrader( 'pluginzip', 'package' );
 	$package     = $file_upload->package;
 
-	// ------------------------------------------------------------------
-	// Read the top-level folder name from the zip BEFORE installing.
-	// HIGH-3: enforce strict slug allowlist — letters, numbers, hyphens, underscores only.
-	// ------------------------------------------------------------------
-	$zip_slug = '';
-	if ( class_exists( 'ZipArchive' ) ) {
-		$zip = new ZipArchive();
-		if ( $zip->open( $package ) === true ) {
-			for ( $i = 0; $i < $zip->numFiles; $i++ ) {
-				$name  = $zip->getNameIndex( $i );
-				$parts = explode( '/', ltrim( $name, '/' ) );
-				$top   = $parts[0];
-				// Strict allowlist: only safe plugin slug characters
-				if ( $top && preg_match( '/^[a-zA-Z0-9_-]+$/', $top ) ) {
-					$zip_slug = $top;
-					break;
-				}
-			}
-			$zip->close();
-		}
-	}
-
-	// Fallback: derive slug from zip filename — sanitize strictly
-	if ( ! $zip_slug ) {
-		$raw      = basename( sanitize_file_name( $_FILES['pluginzip']['name'] ), '.zip' );
-		$stripped = preg_replace( '/[\s_-]?v?\d[\d.]*(-[a-z0-9]+)?$/i', '', $raw );
-		// MEDIUM-2: allowlist after stripping version suffix
-		if ( preg_match( '/^[a-zA-Z0-9_-]+$/', $stripped ) ) {
-			$zip_slug = $stripped;
-		}
-	}
-
 	$deactivated     = [];
 	$old_dir_removed = false;
-	// HIGH-1: snapshot active plugins BEFORE install (was wrongly named $active_before later)
 	$active_plugins  = get_option( 'active_plugins', [] );
 
 	if ( $zip_slug ) {
@@ -464,7 +489,7 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 			}
 		}
 
-		// HIGH-2: confine $old_dir to WP_PLUGIN_DIR with realpath before deleting
+		// Delete old folder using native PHP — WP_Filesystem requires FTP on some hosts
 		$old_dir         = WP_PLUGIN_DIR . '/' . $zip_slug;
 		$real_plugin_dir = realpath( WP_PLUGIN_DIR );
 		$real_old_dir    = realpath( $old_dir );
@@ -473,11 +498,9 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 			$real_old_dir &&
 			$real_plugin_dir &&
 			strpos( $real_old_dir, $real_plugin_dir . DIRECTORY_SEPARATOR ) === 0 &&
-			is_dir( $real_old_dir ) &&
-			$wp_filesystem
+			is_dir( $real_old_dir )
 		) {
-			// LOW-2: check delete return value
-			if ( $wp_filesystem->delete( $real_old_dir, true ) ) {
+			if ( ez_rmdir( $real_old_dir ) ) {
 				$old_dir_removed = true;
 			}
 		}
@@ -596,11 +619,7 @@ add_action( 'wp_ajax_wp_ez_add_delete', function () {
 		wp_send_json_error( [ 'message' => 'Invalid plugin path.' ] );
 	}
 
-	require_once ABSPATH . 'wp-admin/includes/file.php';
 	require_once ABSPATH . 'wp-admin/includes/plugin.php';
-
-	WP_Filesystem();
-	global $wp_filesystem;
 
 	// Must be inactive
 	if ( is_plugin_active( $plugin_file ) ) {
@@ -609,26 +628,26 @@ add_action( 'wp_ajax_wp_ez_add_delete', function () {
 
 	$slug    = dirname( $plugin_file );
 	$abs_dir = ( $slug === '.' )
-		? WP_PLUGIN_DIR . '/' . basename( $plugin_file )  // single-file plugin
+		? WP_PLUGIN_DIR . '/' . basename( $plugin_file )
 		: WP_PLUGIN_DIR . '/' . $slug;
 
-	// LOW-3: use trailing separator in realpath prefix check to prevent prefix confusion
 	$real_plugin_dir = realpath( WP_PLUGIN_DIR );
 	$real_target     = realpath( $abs_dir );
 	if ( ! $real_target || ! $real_plugin_dir || strpos( $real_target, $real_plugin_dir . DIRECTORY_SEPARATOR ) !== 0 ) {
 		wp_send_json_error( [ 'message' => 'Path is outside the plugins directory.' ] );
 	}
 
-	if ( is_dir( $abs_dir ) ) {
-		$deleted = $wp_filesystem->delete( $abs_dir, true );
-	} elseif ( is_file( $abs_dir ) ) {
-		$deleted = $wp_filesystem->delete( $abs_dir );
+	// Use native PHP delete — WP_Filesystem requires FTP credentials on some hosts
+	if ( is_dir( $real_target ) ) {
+		$deleted = ez_rmdir( $real_target );
+	} elseif ( is_file( $real_target ) ) {
+		$deleted = @unlink( $real_target );
 	} else {
-		wp_send_json_error( [ 'message' => 'Plugin directory not found: ' . $slug ] );
+		wp_send_json_error( [ 'message' => 'Plugin not found on disk.' ] );
 	}
 
 	if ( ! $deleted ) {
-		wp_send_json_error( [ 'message' => 'Filesystem delete failed. Check server permissions.' ] );
+		wp_send_json_error( [ 'message' => 'Delete failed — check server file permissions.' ] );
 	}
 
 	wp_send_json_success( [ 'message' => 'Plugin deleted.' ] );

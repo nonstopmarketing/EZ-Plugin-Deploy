@@ -4,7 +4,7 @@ Tags: plugin, install, upload, developer, drag-and-drop
 Requires at least: 5.0
 Tested up to: 6.7
 Requires PHP: 7.4
-Stable tag: 1.7.2
+Stable tag: 1.8.0
 License: GPL-2.0+
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,11 @@ All AJAX actions are protected by nonce verification and capability checks. Uplo
 2. EZ Delete link on an inactive plugin row
 
 == Changelog ==
+
+= 1.8.0 =
+* Fix: EZ Delete now uses native PHP unlink/rmdir instead of WP_Filesystem — works on shared hosts where WP_Filesystem requires FTP credentials
+* Fix: zip slug is now read from the original tmp file BEFORE File_Upload_Upgrader moves it — old version now reliably deactivates and is removed before install
+* Added ez_rmdir() and ez_slug_from_zip() helpers
 
 = 1.7.2 =
 * Revert: EZ Delete restored on all inactive plugin rows (needed for dev workflow)
