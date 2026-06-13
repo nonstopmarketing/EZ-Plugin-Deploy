@@ -4,7 +4,7 @@ Tags: plugin, install, upload, developer, drag-and-drop
 Requires at least: 5.0
 Tested up to: 6.7
 Requires PHP: 7.4
-Stable tag: 1.8.2
+Stable tag: 1.8.3
 License: GPL-2.0+
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,9 @@ All AJAX actions are protected by nonce verification and capability checks. Uplo
 2. EZ Delete link on an inactive plugin row
 
 == Changelog ==
+
+= 1.8.3 =
+* Fix: release zip is now built with git archive (forward-slash paths) instead of PowerShell Compress-Archive, which wrote Windows backslash separators that WordPress mis-unpacked into a nested, wrongly-named folder
 
 = 1.8.2 =
 * Fix: drop-zone installs now force the plugin into a correctly-named folder via upgrader_source_selection, collapsing any nesting (e.g. "my-plugin-1.2.3/my-plugin/") that caused "Plugin file does not exist" on activation
