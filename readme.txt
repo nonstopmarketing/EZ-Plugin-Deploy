@@ -4,7 +4,7 @@ Tags: plugin, install, upload, developer, drag-and-drop
 Requires at least: 5.0
 Tested up to: 6.7
 Requires PHP: 7.4
-Stable tag: 1.7.0
+Stable tag: 1.7.1
 License: GPL-2.0+
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,9 @@ All AJAX actions are protected by nonce verification and capability checks. Uplo
 2. EZ Delete link on an inactive plugin row
 
 == Changelog ==
+
+= 1.7.1 =
+* Fix: EZ Delete link now only appears on the EZ Plugin Deploy row, not on all inactive plugins
 
 = 1.7.0 =
 * Drop zone now appears on wp-admin/plugin-install.php in addition to plugins.php
