@@ -3,7 +3,7 @@
  * Plugin Name: EZ Plugin Deploy
  * Plugin URI:  https://nonstopdev.us/plugin/ez-plugin-deploy-plugin/
  * Description: Large drag-and-drop zone on the Plugins page — deactivates & removes old version before installing.
- * Version:     1.8.3
+ * Version:     1.8.4
  * Author:      NonStop Dev
  * License:     GPL-2.0+
  */
@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
 if ( defined( 'WP_EZ_ADD_VERSION' ) ) {
 	return;
 }
-define( 'WP_EZ_ADD_VERSION', '1.8.3' );
+define( 'WP_EZ_ADD_VERSION', '1.8.4' );
 
 // Self-cleanup: delete the old filename if it still exists alongside this one
 add_action( 'admin_init', function () {
@@ -445,6 +445,29 @@ function ez_find_plugin_file_in_dir( $dir, $relative_prefix, $depth = 0 ) {
 
 add_action( 'wp_ajax_wp_ez_add_upload', function () {
 
+	// Keep PHP notices/warnings/deprecations OUT of the response body so they
+	// can't corrupt the JSON the browser parses ("Unexpected server response").
+	@ini_set( 'display_errors', '0' );
+
+	// Catch fatal errors and return them AS JSON so the real cause is visible
+	// instead of a bare 500 / "Unexpected server response".
+	register_shutdown_function( function () {
+		$e = error_get_last();
+		if ( $e && in_array( $e['type'], [ E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR ], true ) ) {
+			if ( ! headers_sent() ) {
+				@header( 'Content-Type: application/json; charset=utf-8' );
+				http_response_code( 200 );
+			}
+			echo wp_json_encode( [
+				'success' => false,
+				'data'    => [
+					'message' => 'Server error during install.',
+					'detail'  => $e['message'] . ' in ' . $e['file'] . ':' . $e['line'],
+				],
+			] );
+		}
+	} );
+
 	// MEDIUM-1: nonce first, capability second
 	if ( ! isset( $_POST['_nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['_nonce'] ) ), 'wp_ez_add_upload' ) ) {
 		wp_send_json_error( [ 'message' => 'Security check failed.' ] );
@@ -490,7 +513,14 @@ add_action( 'wp_ajax_wp_ez_add_upload', function () {
 	require_once ABSPATH . 'wp-admin/includes/plugin.php';
 	require_once ABSPATH . 'wp-admin/includes/plugin-install.php';
 
-	WP_Filesystem();
+	// WP_Ajax_Upgrader_Skin is not always pulled in by class-wp-upgrader.php
+	if ( ! class_exists( 'WP_Ajax_Upgrader_Skin' ) ) {
+		require_once ABSPATH . 'wp-admin/includes/class-wp-ajax-upgrader-skin.php';
+	}
+
+	if ( false === WP_Filesystem() ) {
+		wp_send_json_error( [ 'message' => 'Could not initialize the filesystem (WP_Filesystem returned false).' ] );
+	}
 
 	// Move upload to WP-managed tmp path
 	$file_upload = new File_Upload_Upgrader( 'pluginzip', 'package' );

@@ -4,7 +4,7 @@ Tags: plugin, install, upload, developer, drag-and-drop
 Requires at least: 5.0
 Tested up to: 6.7
 Requires PHP: 7.4
-Stable tag: 1.8.3
+Stable tag: 1.8.4
 License: GPL-2.0+
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,11 @@ All AJAX actions are protected by nonce verification and capability checks. Uplo
 2. EZ Delete link on an inactive plugin row
 
 == Changelog ==
+
+= 1.8.4 =
+* Fix: "Unexpected server response" — explicitly load WP_Ajax_Upgrader_Skin (not always available for custom AJAX actions; caused a fatal during install)
+* Hardened the upload handler: PHP notices/warnings no longer leak into the JSON response, and fatal errors are now returned as a readable JSON message instead of a bare 500
+* Bail out with a clear message if WP_Filesystem() cannot initialize
 
 = 1.8.3 =
 * Fix: release zip is now built with git archive (forward-slash paths) instead of PowerShell Compress-Archive, which wrote Windows backslash separators that WordPress mis-unpacked into a nested, wrongly-named folder
