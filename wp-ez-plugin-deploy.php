@@ -3,7 +3,7 @@
  * Plugin Name: EZ Plugin Deploy
  * Plugin URI:  https://nonstopdev.us/plugin/ez-plugin-deploy-plugin/
  * Description: Large drag-and-drop zone on the Plugins page — deactivates & removes old version before installing.
- * Version:     1.8.4
+ * Version:     1.8.5
  * Author:      NonStop Dev
  * License:     GPL-2.0+
  */
@@ -14,7 +14,7 @@ defined( 'ABSPATH' ) || exit;
 if ( defined( 'WP_EZ_ADD_VERSION' ) ) {
 	return;
 }
-define( 'WP_EZ_ADD_VERSION', '1.8.4' );
+define( 'WP_EZ_ADD_VERSION', '1.8.5' );
 
 // Self-cleanup: delete the old filename if it still exists alongside this one
 add_action( 'admin_init', function () {
@@ -216,7 +216,16 @@ add_action( 'admin_head', function () {
 							showResult('error', res.data.message || 'Unknown error.', res.data.detail || '');
 						}
 					} catch (err) {
-						showResult('error', 'Unexpected server response.', xhr.responseText.slice(0, 500));
+						var body = xhr.responseText || '';
+						// Detect a Cloudflare / security-challenge interstitial (HTML, not JSON)
+						if (/Just a moment|cloudflare|challenge-platform|cf-browser-verification/i.test(body) ||
+							/^\s*<(!doctype|html)/i.test(body)) {
+							showResult('error',
+								'Blocked by a Cloudflare security challenge — not a plugin error.',
+								'Your host challenged this request. Reload the page (F5) to refresh your Cloudflare clearance, then try the upload again.');
+						} else {
+							showResult('error', 'Unexpected server response.', body.slice(0, 500));
+						}
 					}
 				};
 
@@ -302,7 +311,13 @@ add_action( 'admin_head', function () {
 							alert('EZ Delete failed: ' + (res.data && res.data.message || 'Unknown error'));
 						}
 					} catch (err) {
-						alert('EZ Delete: unexpected server response.');
+						var body = xhr.responseText || '';
+						if (/Just a moment|cloudflare|challenge-platform|cf-browser-verification/i.test(body) ||
+							/^\s*<(!doctype|html)/i.test(body)) {
+							alert('EZ Delete blocked by a Cloudflare security challenge (not a plugin error). Reload the page and try again.');
+						} else {
+							alert('EZ Delete: unexpected server response.');
+						}
 					}
 				};
 				xhr.onerror = function () {

@@ -4,7 +4,7 @@ Tags: plugin, install, upload, developer, drag-and-drop
 Requires at least: 5.0
 Tested up to: 6.7
 Requires PHP: 7.4
-Stable tag: 1.8.4
+Stable tag: 1.8.5
 License: GPL-2.0+
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,9 @@ All AJAX actions are protected by nonce verification and capability checks. Uplo
 2. EZ Delete link on an inactive plugin row
 
 == Changelog ==
+
+= 1.8.5 =
+* Improvement: when a Cloudflare (or similar) security challenge intercepts the request, the drop zone and EZ Delete now show a clear "blocked by security challenge — reload and retry" message instead of the generic "Unexpected server response"
 
 = 1.8.4 =
 * Fix: "Unexpected server response" — explicitly load WP_Ajax_Upgrader_Skin (not always available for custom AJAX actions; caused a fatal during install)
